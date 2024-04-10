@@ -11,6 +11,11 @@ import crud
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import func
+from passlib.context import CryptContext
+import auth
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI()
 
@@ -57,3 +62,60 @@ def delete_contact(contact_id: int, db: Session = Depends(get_db)):
 @app.get("/contacts/birthdays/", response_model=List[schemas.Contact])
 def upcoming_birthdays(db: Session = Depends(get_db)):
     return crud.get_upcoming_birthdays(db=db)
+
+@app.post("/register/", response_model=schemas.User, status_code=status.HTTP_201_CREATED)
+def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    if crud.get_user_by_email(db, user.email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User with this email already exists",
+        )
+    hashed_password = pwd_context.hash(user.password)
+    print("Hashed password for user:", hashed_password)
+    print("Hashed password in database:", user.password)
+
+    db_user = models.User(email=user.email, password=hashed_password)
+
+    return crud.create_user(db=db, user=db_user)
+
+
+
+@app.post("/login/")
+def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_email(db, user.email)
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+        )
+    if not pwd_context.verify(user.password, db_user.password):
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+        )
+
+    access_token = auth.create_access_token()
+    return db_user
+
+
+@app.post("/token/")
+def login_for_access_token(user: schemas.UserLogin, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_email(db, user.email)
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not pwd_context.verify(user.password, db_user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": db_user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}

@@ -21,3 +21,22 @@ class Contact(ContactBase):
 
     class Config:
         orm_mode = True
+
+
+# Схема для створення нового користувача (реєстрація)
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+# Схема для входу користувача (автентифікація)
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+# Модель користувача в базі даних
+class User(BaseModel):
+    id: int
+    email: str
+
+    class Config:
+        orm_mode = True

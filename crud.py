@@ -1,5 +1,6 @@
 from datetime import date, timedelta
-
+from passlib.context import CryptContext
+from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -46,3 +47,29 @@ def get_upcoming_birthdays(db: Session):
         func.date_trunc('day', models.Contact.birthday) >= today,
         func.date_trunc('day', models.Contact.birthday) <= week_later
     ).all()
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def get_user_by_email(db: Session, email: str):
+    return db.query(models.User).filter(models.User.email == email).first()
+
+
+def create_user(db: Session, user: schemas.UserCreate):
+    existing_user = get_user_by_email(db, user.email)
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User with this email already exists")
+
+    hashed_password = pwd_context.hash(user.password)
+    db_user = models.User(email=user.email, password=hashed_password)
+
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+async def update_token(user: models.User, token: str | None, db: Session):
+    user.refresh_token = token
+    db.commit()

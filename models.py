@@ -12,6 +12,15 @@ class Contact(Base):
     phone_number = Column(String)
     birthday = Column(Date)
     extra_data = Column(String, nullable=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    user = relationship('User', backref='contacts', lazy='joined')
 
-# Створення таблиці в базі даних
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(150))
+    email = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String(250), nullable=False)
+
 Base.metadata.create_all(bind=engine)
+
