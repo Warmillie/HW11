@@ -1,5 +1,6 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+from models import Role
 from typing import Optional
 
 class ContactBase(BaseModel):
@@ -23,20 +24,24 @@ class Contact(ContactBase):
         orm_mode = True
 
 
-# Схема для створення нового користувача (реєстрація)
-class UserCreate(BaseModel):
-    email: str
-    password: str
+class UserSchema(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=8)
 
-# Схема для входу користувача (автентифікація)
-class UserLogin(BaseModel):
-    email: str
-    password: str
 
-# Модель користувача в базі даних
-class User(BaseModel):
-    id: int
-    email: str
+class UserResponse(BaseModel):
+    id: int = 1
+    username: str
+    email: EmailStr
+    avatar: str
+    role: Role
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+
+class TokenSchema(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
