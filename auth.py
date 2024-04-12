@@ -1,65 +1,51 @@
-from datetime import datetime, timedelta
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Depends, status, Path, Query, Security
+from fastapi.security import OAuth2PasswordRequestForm, HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
-from fastapi import Depends, HTTPException, status
-from passlib.context import CryptContext
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.ext.asyncio import AsyncSession
-from jose import JWTError, jwt
-
-import crud
 from db import get_db
+import users as repositories_users
+from schemas import UserSchema, TokenSchema, UserResponse
+from auth_services import auth_service
 
 
-
-class Auth:
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    SECRET_KEY = "974790aec4ac460bdc11645decad4dce7c139b7f2982b7428ec44e886ea588c6"
-    ALGORITHM = "HS256"
-
-    def verify_password(self, plain_password, hashed_password):
-        return self.pwd_context.verify(plain_password, hashed_password)
-
-    def get_password_hash(self, password: str):
-        return self.pwd_context.hash(password)
-
-    oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
-
-    # define a function to generate a new access token
-    async def create_access_token(self, data: dict, expires_delta: Optional[float] = None):
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + timedelta(seconds=expires_delta)
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=15)
-        to_encode.update({"iat": datetime.utcnow(), "exp": expire, "scope": "access_token"})
-        encoded_access_token = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
-        return encoded_access_token
-
-    async def get_current_user(self, token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
-        credentials_exception = HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-        try:
-            # Decode JWT
-            payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
-            if payload['scope'] == 'access_token':
-                email = payload["sub"]
-                if email is None:
-                    raise credentials_exception
-            else:
-                raise credentials_exception
-        except JWTError as e:
-            raise credentials_exception
-
-        user = await crud.get_user_by_email(email, db)
-        if user is None:
-            raise credentials_exception
-        return user
+get_refresh_token = HTTPBearer()
 
 
-auth_service = Auth()
+@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def signup(body: UserSchema, db: Session = Depends(get_db)):
+    exist_user = await repositories_users.get_user_by_email(body.email, db)
+    if exist_user:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account already exists")
+    body.password = auth_service.get_password_hash(body.password)
+    new_user = await repositories_users.create_user(body, db)
+    return new_user
 
+
+@router.post("/login",  response_model=TokenSchema)
+async def login(body: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = await repositories_users.get_user_by_email(body.username, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email")
+    if not auth_service.verify_password(body.password, user.password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+    # Generate JWT
+    access_token = await auth_service.create_access_token(data={"sub": user.email, "test": "Сергій Багмет"})
+    refresh_token = await auth_service.create_refresh_token(data={"sub": user.email})
+    await repositories_users.update_token(user, refresh_token, db)
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+
+@router.get('/refresh_token',  response_model=TokenSchema)
+async def refresh_token(credentials: HTTPAuthorizationCredentials = Depends(get_refresh_token),
+                        db: Session = Depends(get_db)):
+    token = credentials.credentials
+    email = await auth_service.decode_refresh_token(token)
+    user = await repositories_users.get_user_by_email(email, db)
+    if user.refresh_token != token:
+        await repositories_users.update_token(user, None, db)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    access_token = await auth_service.create_access_token(data={"sub": email})
+    refresh_token = await auth_service.create_refresh_token(data={"sub": email})
+    await repositories_users.update_token(user, refresh_token, db)
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
